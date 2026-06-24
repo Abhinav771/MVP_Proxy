@@ -105,6 +105,13 @@ function App() {
           </div>
         </div>
         <div className="card stat-card">
+          <div className="stat-icon bg-orange"><CreditCard size={24} /></div>
+          <div>
+            <h3>Total Actual Cost</h3>
+            <div className="stat-value">${(data.actual_cost || 0).toFixed(4)}</div>
+          </div>
+        </div>
+        <div className="card stat-card">
           <div className="stat-icon bg-green"><DollarSign size={24} /></div>
           <div>
             <h3>Estimated Saved</h3>
@@ -125,13 +132,7 @@ function App() {
             <div className="stat-value">{smallModelRate}%</div>
           </div>
         </div>
-        <div className="card stat-card">
-          <div className="stat-icon bg-orange"><CreditCard size={24} /></div>
-          <div>
-            <h3>Total Actual Cost</h3>
-            <div className="stat-value">${(data.actual_cost || 0).toFixed(4)}</div>
-          </div>
-        </div>
+        
       </div>
 
       <div className="main-grid">
