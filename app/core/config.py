@@ -2,18 +2,10 @@ import os
 import spacy
 from dataclasses import dataclass
 from dotenv import load_dotenv
-from groq import Groq
 from google import genai
 from pinecone import Pinecone
 
 load_dotenv()
-
-# ── Groq client (kept for legacy use) ────────────────────────────────────────
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-print(f"DEBUG KEY LOADED: '{GROQ_API_KEY}'")
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY is not set in .env file")
-groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ── Google Embedding client ───────────────────────────────────────────────────
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -32,46 +24,41 @@ pinecone_index = pc.Index("semantic-cache")
 nlp = spacy.load("en_core_web_sm")
 
 
-# ── Universal LLM config (loaded from .env) ───────────────────────────────────
+# ── LLM Config dataclass ─────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class LLMConfig:
     """
-    Holds the active LLM provider settings read from .env.
+    Holds one LLM provider's settings (base_url, api_key, model_name).
 
-    To switch provider, change these three values in .env:
-        LLM_BASE_URL    — OpenAI-compatible API endpoint
-        LLM_API_KEY     — Provider API key
-        LLM_MODEL_NAME  — Model identifier string
+    Used by the RouteLLM system to define two tiers:
+        small_model_config  — cheap/fast  (easy tasks)
+        large_model_config  — expensive   (hard tasks)
 
-    Supported providers (anything OpenAI-compatible):
-        Groq       → https://api.groq.com/openai/v1
-        OpenAI     → https://api.openai.com/v1
-        Mistral    → https://api.mistral.ai/v1
-        Together   → https://api.together.xyz/v1
-        Ollama     → http://localhost:11434/v1
-        Perplexity → https://api.perplexity.ai
-        Anyscale   → https://api.endpoints.anyscale.com/v1
+    Each tier can point to a different provider or the same one.
     """
     base_url: str
     api_key: str
     model_name: str
 
 
-_llm_base_url = os.getenv("LLM_BASE_URL")
-_llm_api_key = os.getenv("LLM_API_KEY")
-_llm_model_name = os.getenv("LLM_MODEL_NAME")
+def _load_model_config(prefix: str) -> LLMConfig:
+    """Load a LLMConfig from env vars with the given prefix (SMALL_MODEL / LARGE_MODEL)."""
+    base_url = os.getenv(f"{prefix}_BASE_URL")
+    api_key = os.getenv(f"{prefix}_API_KEY")
+    model_name = os.getenv(f"{prefix}_NAME")
 
-if not all([_llm_base_url, _llm_api_key, _llm_model_name]):
-    raise RuntimeError(
-        "LLM provider config is incomplete. "
-        "Set LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL_NAME in your .env file."
-    )
+    if not all([base_url, api_key, model_name]):
+        raise RuntimeError(
+            f"{prefix} config is incomplete. "
+            f"Set {prefix}_BASE_URL, {prefix}_API_KEY, and {prefix}_NAME in .env."
+        )
 
-# Singleton: import this anywhere to access the active LLM provider settings
-llm_config = LLMConfig(
-    base_url=_llm_base_url,
-    api_key=_llm_api_key,
-    model_name=_llm_model_name,
-)
+    return LLMConfig(base_url=base_url, api_key=api_key, model_name=model_name)
 
-print(f"✅ LLM provider: {llm_config.base_url} | model: {llm_config.model_name}")
+
+# ── Two-tier model configs (used by RouteLLM) ────────────────────────────────
+small_model_config = _load_model_config("SMALL_MODEL")
+large_model_config = _load_model_config("LARGE_MODEL")
+
+print(f"✅ Small model: {small_model_config.base_url} | {small_model_config.model_name}")
+print(f"✅ Large model: {large_model_config.base_url} | {large_model_config.model_name}")

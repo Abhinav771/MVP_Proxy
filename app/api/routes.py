@@ -3,11 +3,12 @@ from fastapi.responses import StreamingResponse
 
 from app.models.schemas import ChatRequest
 from app.core import redis_db
-from app.core.config import llm_config
+from app.core.config import small_model_config, large_model_config
 from app.services.rate_limiter import rate_limit
 from app.services.nlp_service import is_volatile
 from app.services.vector_db import embed, query_similar, store_embedding
 from app.services.llm_client import async_stream_llm
+from app.services.router import get_model_config
 
 router = APIRouter()
 SIMILARITY_THRESHOLD = 0.85
@@ -28,8 +29,8 @@ async def check_health():
     return {
         "status": "ok",
         "redis": redis_status,
-        "llm_provider": llm_config.base_url,
-        "llm_model": llm_config.model_name,
+        "small_model": small_model_config.model_name,
+        "large_model": large_model_config.model_name,
     }
 
 
@@ -37,15 +38,24 @@ async def check_health():
 async def chat_endpoint(request: ChatRequest, req: Request):
     await rate_limit(req.client.host)
 
+    # ── Route the prompt to the right model ──────────────────────────────────
+    config, decision = get_model_config(request.prompt)
+    print(
+        f"🧠 ROUTED → {decision['route']} | "
+        f"model: {config.model_name} | "
+        f"confidence: {decision['confidence']:.2f} | "
+        f"reason: {decision['reason']}"
+    )
+
     # ── Step 1: Check volatility FIRST ───────────────────────────────────────
     if is_volatile(request.prompt):
         print(f"⚡ VOLATILE | skipping cache | prompt: '{request.prompt}'")
 
         async def volatile_stream():
             async for token in async_stream_llm(
-                base_url=llm_config.base_url,
-                api_key=llm_config.api_key,
-                model_name=llm_config.model_name,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                model_name=config.model_name,
                 prompt=request.prompt,
             ):
                 yield token
@@ -77,9 +87,9 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                 f"Using the above as context, give a fresh and direct answer to the new question."
             )
             async for token in async_stream_llm(
-                base_url=llm_config.base_url,
-                api_key=llm_config.api_key,
-                model_name=llm_config.model_name,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                model_name=config.model_name,
                 prompt=synthesis_prompt,
             ):
                 yield token
@@ -88,9 +98,9 @@ async def chat_endpoint(request: ChatRequest, req: Request):
             # Cache miss: stream tokens live while collecting the full response
             collector = []
             async for token in async_stream_llm(
-                base_url=llm_config.base_url,
-                api_key=llm_config.api_key,
-                model_name=llm_config.model_name,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                model_name=config.model_name,
                 prompt=request.prompt,
                 collector=collector,   # filled once the stream ends
             ):
