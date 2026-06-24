@@ -103,6 +103,11 @@ async def get_current_usage(ip: str) -> dict:
     s_used = int(small_usage) if small_usage else 0
     l_used = int(large_usage) if large_usage else 0
     
+    from app.core.config import small_model_config, large_model_config
+    s_cost = small_model_config.cost_per_1m
+    l_cost = large_model_config.cost_per_1m
+    actual_cost = (s_used / 1_000_000 * s_cost) + (l_used / 1_000_000 * l_cost)
+    
     return {
         "ip": ip,
         "small_model": {
@@ -114,7 +119,8 @@ async def get_current_usage(ip: str) -> dict:
             "used": l_used,
             "limit": large_limit,
             "remaining": large_limit - l_used
-        }
+        },
+        "actual_cost": actual_cost
     }
 
 async def get_all_users_usage() -> list[dict]:

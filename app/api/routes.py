@@ -13,6 +13,8 @@ from app.services.token_budget import (
     count_tokens, check_budget, check_budget_boolean,
     consume_budget, set_custom_limit, get_current_usage, get_all_users_usage
 )
+from app.services import telemetry
+from fastapi.middleware.cors import CORSMiddleware
 
 router = APIRouter()
 SIMILARITY_THRESHOLD = 0.93
@@ -36,6 +38,10 @@ async def check_health():
         "large_model": large_model_config.model_name,
     }
 
+@router.get("/admin/api/dashboard")
+async def admin_get_dashboard():
+    return await telemetry.get_dashboard_metrics()
+
 @router.post("/admin/set-limit")
 async def admin_set_limit(request: SetLimitRequest):
     if request.model_type not in ["small", "large"]:
@@ -53,13 +59,18 @@ async def admin_get_all_users():
 
 @router.post("/chat")
 async def chat_endpoint(request: ChatRequest, req: Request):
-    client_ip = req.client.host
+    client_ip = req.headers.get("x-forwarded-for", req.client.host)
     await rate_limit(client_ip)
+    await telemetry.record_request()
 
     # ── Route the prompt to the right model ──────────────────────────────────
     config, decision = get_model_config(request.prompt)
     routed_model = "large" if decision["route"] == "large" else "small"
     needs_quality_check = decision["route"] == "small_then_escalate"
+    
+    reason_lower = decision["reason"].lower()
+    method = "ml" if "ml router" in reason_lower else ("code" if "code" in reason_lower else "rule")
+    await telemetry.record_route(routed_model, method)
 
     # ── Token Budget Check ───────────────────────────────────────────────────
     prompt_tokens = count_tokens(request.prompt)
@@ -75,6 +86,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
 
     # ── Step 1: Check volatility FIRST ───────────────────────────────────────
     if is_volatile(request.prompt):
+        await telemetry.record_volatile(request.prompt)
         print(f"⚡ VOLATILE | skipping cache | prompt: '{request.prompt}'")
 
         async def volatile_stream():
@@ -96,6 +108,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                     if not has_large_budget:
                         yield f"\n\n---\n[Error: Tried to escalate to large model due to low quality ('{reason}'), but daily large model token limit is exceeded.]"
                     else:
+                        await telemetry.record_escalation(reason)
                         print(f"⬆️ ESCALATING → large | reason: {reason} | model: {large_model_config.model_name}")
                         await consume_budget(client_ip, "large", prompt_tokens)
                         yield "\n\n---\n🔄 Improving answer with a more powerful model...\n\n"
@@ -130,8 +143,10 @@ async def chat_endpoint(request: ChatRequest, req: Request):
 
     if is_cache_hit:
         cached = matches[0].metadata
+        await telemetry.record_cache_hit(request.prompt, matches[0].score)
         print(f"🟢 CACHE HIT  | score: {matches[0].score:.4f} | matched: '{cached['prompt']}'")
     else:
+        await telemetry.record_cache_miss()
         print(f"🔴 CACHE MISS | prompt: '{request.prompt}'")
 
     async def stream_generator():
@@ -167,6 +182,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                     if not has_large_budget:
                         yield f"\n\n---\n[Error: Tried to escalate to large model due to low quality ('{reason}'), but daily large model token limit is exceeded.]"
                     else:
+                        await telemetry.record_escalation(reason)
                         print(f"⬆️ ESCALATING → large | reason: {reason} | model: {large_model_config.model_name}")
                         await consume_budget(client_ip, "large", synth_prompt_tokens)
                         yield "\n\n---\n🔄 Improving answer with a more powerful model...\n\n"
@@ -211,6 +227,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                     if not has_large_budget:
                         yield f"\n\n---\n[Error: Tried to escalate to large model due to low quality ('{reason}'), but daily large model token limit is exceeded.]"
                     else:
+                        await telemetry.record_escalation(reason)
                         print(f"⬆️ ESCALATING → large | reason: {reason} | model: {large_model_config.model_name}")
                         await consume_budget(client_ip, "large", prompt_tokens)
                         yield "\n\n---\n🔄 Improving answer with a more powerful model...\n\n"

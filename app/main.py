@@ -22,7 +22,17 @@ async def lifespan(app: FastAPI):
         await redis_db.redis_client.aclose()
         print("🔴 Redis connection closed")
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Register the endpoints
 app.include_router(router)

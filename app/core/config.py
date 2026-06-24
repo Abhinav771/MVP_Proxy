@@ -39,6 +39,7 @@ class LLMConfig:
     base_url: str
     api_key: str
     model_name: str
+    cost_per_1m: float = 0.0
 
 
 def _load_model_config(prefix: str) -> LLMConfig:
@@ -46,6 +47,7 @@ def _load_model_config(prefix: str) -> LLMConfig:
     base_url = os.getenv(f"{prefix}_BASE_URL")
     api_key = os.getenv(f"{prefix}_API_KEY")
     model_name = os.getenv(f"{prefix}_NAME")
+    cost_per_1m = float(os.getenv(f"{prefix}_COST_PER_1M", "0.0"))
 
     if not all([base_url, api_key, model_name]):
         raise RuntimeError(
@@ -53,7 +55,7 @@ def _load_model_config(prefix: str) -> LLMConfig:
             f"Set {prefix}_BASE_URL, {prefix}_API_KEY, and {prefix}_NAME in .env."
         )
 
-    return LLMConfig(base_url=base_url, api_key=api_key, model_name=model_name)
+    return LLMConfig(base_url=base_url, api_key=api_key, model_name=model_name, cost_per_1m=cost_per_1m)
 
 
 # ── Two-tier model configs (used by RouteLLM) ────────────────────────────────
