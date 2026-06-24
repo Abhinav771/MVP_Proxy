@@ -40,8 +40,10 @@ async def record_route(model_type: str, method: str):
     await redis_db.redis_client.incr(f"telemetry:route:{model_type}:{date_str}")
     await redis_db.redis_client.incr(f"telemetry:route_method:{method}:{date_str}")
 
-async def get_dashboard_metrics() -> dict:
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+from datetime import timedelta
+
+async def get_dashboard_metrics(date_str: str = None) -> dict:
+    date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     r = redis_db.redis_client
     
     # Fetch all simple counters
@@ -73,7 +75,7 @@ async def get_dashboard_metrics() -> dict:
     top_prompts = [{"prompt": p.decode("utf-8") if isinstance(p, bytes) else p, "count": int(s)} for p, s in top_prompts_tuples]
 
     # Exact token savings calculation
-    all_users = await get_all_users_usage()
+    all_users = await get_all_users_usage(date_str)
     global_small_tokens = sum(u["small_model"]["used"] for u in all_users)
     global_large_tokens = sum(u["large_model"]["used"] for u in all_users)
     global_actual_cost = sum(u.get("actual_cost", 0.0) for u in all_users)
@@ -109,3 +111,27 @@ async def get_dashboard_metrics() -> dict:
         "global_small_tokens": global_small_tokens,
         "global_large_tokens": global_large_tokens
     }
+
+async def get_historical_metrics(days: int = 7) -> dict:
+    """Fetch metrics for the last N days."""
+    history = {
+        "dates": [],
+        "requests": [],
+        "actual_cost": [],
+        "estimated_savings": []
+    }
+    
+    today = datetime.now(timezone.utc)
+    
+    for i in range(days - 1, -1, -1):
+        target_date = today - timedelta(days=i)
+        date_str = target_date.strftime("%Y-%m-%d")
+        
+        metrics = await get_dashboard_metrics(date_str)
+        
+        history["dates"].append(date_str)
+        history["requests"].append(metrics["total_requests"])
+        history["actual_cost"].append(metrics["actual_cost"])
+        history["estimated_savings"].append(metrics["estimated_savings"])
+        
+    return history

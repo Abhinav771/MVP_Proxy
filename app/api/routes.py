@@ -40,7 +40,10 @@ async def check_health():
 
 @router.get("/admin/api/dashboard")
 async def admin_get_dashboard():
-    return await telemetry.get_dashboard_metrics()
+    today = await telemetry.get_dashboard_metrics()
+    history = await telemetry.get_historical_metrics(7)
+    today["history"] = history
+    return today
 
 @router.post("/admin/set-limit")
 async def admin_set_limit(request: SetLimitRequest):

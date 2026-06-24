@@ -17,14 +17,14 @@ def count_tokens(text: str) -> int:
         return 0
     return len(encoder.encode(text))
 
-def get_budget_key(ip: str, model_type: str) -> str:
+def get_budget_key(ip: str, model_type: str, date_str: str = None) -> str:
     """Generate the daily token usage key for a given IP and model type."""
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return f"tokens:{ip}:{model_type}:{date_str}"
 
-def get_limit_key(ip: str, model_type: str) -> str:
+def get_limit_key(ip: str, model_type: str, date_str: str = None) -> str:
     """Generate the daily custom limit key for a given IP and model type."""
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return f"limit:{ip}:{model_type}:{date_str}"
 
 async def get_user_limit(ip: str, model_type: str) -> int:
@@ -92,12 +92,12 @@ async def set_custom_limit(ip: str, model_type: str, new_limit: int) -> None:
     key = get_limit_key(ip, model_type)
     await redis_db.redis_client.set(key, new_limit, ex=86400)
 
-async def get_current_usage(ip: str) -> dict:
-    """Admin function: Get the current daily usage and limit for a specific IP (both models)."""
-    small_usage = await redis_db.redis_client.get(get_budget_key(ip, "small"))
-    large_usage = await redis_db.redis_client.get(get_budget_key(ip, "large"))
+async def get_current_usage(ip: str, date_str: str = None) -> dict:
+    """Admin function: Get the daily usage and limit for a specific IP (both models)."""
+    small_usage = await redis_db.redis_client.get(get_budget_key(ip, "small", date_str))
+    large_usage = await redis_db.redis_client.get(get_budget_key(ip, "large", date_str))
     
-    small_limit = await get_user_limit(ip, "small")
+    small_limit = await get_user_limit(ip, "small") # Assuming limit applies broadly
     large_limit = await get_user_limit(ip, "large")
     
     s_used = int(small_usage) if small_usage else 0
@@ -123,9 +123,9 @@ async def get_current_usage(ip: str) -> dict:
         "actual_cost": actual_cost
     }
 
-async def get_all_users_usage() -> list[dict]:
-    """Admin function: Get usage for all IPs that have used tokens today."""
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+async def get_all_users_usage(date_str: str = None) -> list[dict]:
+    """Admin function: Get usage for all IPs that have used tokens on the given date."""
+    date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pattern = f"tokens:*:{date_str}"
     
     keys = await redis_db.redis_client.keys(pattern)
@@ -140,6 +140,6 @@ async def get_all_users_usage() -> list[dict]:
             
     users = []
     for ip in ips:
-        users.append(await get_current_usage(ip))
+        users.append(await get_current_usage(ip, date_str))
             
     return users

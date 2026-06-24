@@ -27,6 +27,7 @@ function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [activeChart, setActiveChart] = useState(null);
 
   useEffect(() => {
     fetchData();
@@ -97,14 +98,20 @@ function App() {
       </header>
 
       <div className="hero-grid">
-        <div className="card stat-card">
+        <div 
+          className={`card stat-card clickable ${activeChart === 'requests' ? 'active' : ''}`}
+          onClick={() => setActiveChart(activeChart === 'requests' ? null : 'requests')}
+        >
           <div className="stat-icon bg-blue"><Activity size={24} /></div>
           <div>
             <h3>Total Requests</h3>
             <div className="stat-value">{data.total_requests}</div>
           </div>
         </div>
-        <div className="card stat-card">
+        <div 
+          className={`card stat-card clickable ${activeChart === 'financials' ? 'active' : ''}`}
+          onClick={() => setActiveChart(activeChart === 'financials' ? null : 'financials')}
+        >
           <div className="stat-icon bg-orange"><CreditCard size={24} /></div>
           <div>
             <h3>Total Actual Cost</h3>
@@ -134,6 +141,58 @@ function App() {
         </div>
         
       </div>
+
+      {activeChart === 'requests' && data.history && (
+        <div className="historical-chart">
+          <h3>Historical Requests (7 Days)</h3>
+          <div className="chart-container" style={{ height: '300px' }}>
+            <Bar 
+              data={{
+                labels: data.history.dates,
+                datasets: [{
+                  label: 'Total Requests',
+                  data: data.history.requests,
+                  backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                }]
+              }}
+              options={{ maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: '#334155', drawTicks: false } }, x: { grid: { color: '#334155', drawTicks: false } } } }}
+            />
+          </div>
+        </div>
+      )}
+
+      {activeChart === 'financials' && data.history && (
+        <div className="historical-chart">
+          <h3>Financial Overview (Cost vs Savings)</h3>
+          <div className="chart-container" style={{ height: '300px' }}>
+            <Bar 
+              data={{
+                labels: data.history.dates,
+                datasets: [
+                  {
+                    label: 'Actual Cost ($)',
+                    data: data.history.actual_cost,
+                    backgroundColor: 'rgba(245, 158, 11, 0.8)',
+                  },
+                  {
+                    label: 'Estimated Savings ($)',
+                    data: data.history.estimated_savings,
+                    backgroundColor: 'rgba(16, 185, 129, 0.8)',
+                  }
+                ]
+              }}
+              options={{ 
+                maintainAspectRatio: false, 
+                scales: { 
+                  x: { stacked: true, grid: { color: '#334155', drawTicks: false } }, 
+                  y: { stacked: true, beginAtZero: true, grid: { color: '#334155', drawTicks: false } } 
+                },
+                plugins: { legend: { position: 'bottom', labels: { color: '#f8fafc' } } }
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="main-grid">
         <div className="card chart-card">
