@@ -156,6 +156,59 @@ def route_prompt(prompt: str) -> dict:
         return rule_result
     return ml_route(prompt)
 
+# ── Heuristic quality check (zero API calls) ─────────────────────────────────
+
+_REFUSAL_PATTERNS = [
+    "i don't know",
+    "i'm not sure",
+    "i cannot",
+    "i can't",
+    "i am not able",
+    "i'm unable",
+    "i am unable",
+    "as an ai",
+    "i do not have",
+    "i'm not able",
+    "i don't have enough information",
+    "i apologize, but i",
+    "sorry, but i can't",
+    "this is beyond my",
+]
+
+
+def is_low_quality(response: str) -> tuple[bool, str]:
+    """
+    Fast heuristic check for obviously bad responses (no API call needed).
+
+    Returns:
+        (is_bad, reason) — True + reason string if quality is poor, else (False, "")
+    """
+    if not response or response.isspace():
+        return True, "Empty response"
+
+    if response.startswith("Error:"):
+        return True, "Response is an error message"
+
+    if len(response.strip()) < 50:
+        return True, f"Too short ({len(response.strip())} chars)"
+
+    # Check for refusal patterns
+    response_lower = response.lower()
+    for pattern in _REFUSAL_PATTERNS:
+        if pattern in response_lower:
+            return True, f"Refusal detected: '{pattern}'"
+
+    # Check for repetition loops (same sentence 3+ times)
+    sentences = [s.strip() for s in response.split(".") if s.strip()]
+    if len(sentences) >= 3:
+        from collections import Counter
+        counts = Counter(sentences)
+        for sentence, count in counts.items():
+            if count >= 3 and len(sentence) > 10:
+                return True, f"Repetition loop: '{sentence[:40]}...' repeated {count}x"
+
+    return False, ""
+
 
 # ── Convenience function for routes.py ────────────────────────────────────────
 
