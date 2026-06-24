@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.models.schemas import ChatRequest
+from app.models.schemas import ChatRequest, SetLimitRequest
 from app.core import redis_db
 from app.core.config import small_model_config, large_model_config
 from app.services.rate_limiter import rate_limit
@@ -9,6 +9,7 @@ from app.services.nlp_service import is_volatile
 from app.services.vector_db import embed, query_similar, store_embedding
 from app.services.llm_client import async_stream_llm
 from app.services.router import get_model_config, is_low_quality
+from app.services.token_budget import count_tokens, check_budget, consume_budget, set_custom_limit, get_current_usage, get_all_users_usage
 
 router = APIRouter()
 SIMILARITY_THRESHOLD = 0.85
@@ -33,10 +34,28 @@ async def check_health():
         "large_model": large_model_config.model_name,
     }
 
+@router.post("/admin/set-limit")
+async def admin_set_limit(request: SetLimitRequest):
+    await set_custom_limit(request.ip, request.limit)
+    return {"status": "ok", "message": f"Limit set to {request.limit} for {request.ip}"}
+
+@router.get("/admin/usage/{ip}")
+async def admin_get_usage(ip: str):
+    return await get_current_usage(ip)
+
+@router.get("/admin/users")
+async def admin_get_all_users():
+    return {"users": await get_all_users_usage()}
 
 @router.post("/chat")
 async def chat_endpoint(request: ChatRequest, req: Request):
-    await rate_limit(req.client.host)
+    client_ip = req.client.host
+    await rate_limit(client_ip)
+
+    # ── Token Budget Check ───────────────────────────────────────────────────
+    prompt_tokens = count_tokens(request.prompt)
+    await check_budget(client_ip, prompt_tokens)
+    await consume_budget(client_ip, prompt_tokens)
 
     # ── Route the prompt to the right model ──────────────────────────────────
     config, decision = get_model_config(request.prompt)
@@ -72,15 +91,23 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                         f"model: {large_model_config.model_name}"
                     )
                     yield "\n\n---\n🔄 Improving answer with a more powerful model...\n\n"
+                    large_collector = []
                     async for token in async_stream_llm(
                         base_url=large_model_config.base_url,
                         api_key=large_model_config.api_key,
                         model_name=large_model_config.model_name,
                         prompt=request.prompt,
+                        collector=large_collector,
                     ):
                         yield token
+                    if large_collector and large_collector[0]:
+                        await consume_budget(client_ip, count_tokens(large_collector[0]))
+                    return
                 else:
                     print(f"✅ QUALITY CHECK PASSED | small model response accepted ({len(collector[0])} chars)")
+
+            if collector and collector[0]:
+                await consume_budget(client_ip, count_tokens(collector[0]))
 
         return StreamingResponse(volatile_stream(), media_type="text/plain")
 
@@ -127,15 +154,23 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                         f"model: {large_model_config.model_name}"
                     )
                     yield "\n\n---\n🔄 Improving answer with a more powerful model...\n\n"
+                    large_collector = []
                     async for token in async_stream_llm(
                         base_url=large_model_config.base_url,
                         api_key=large_model_config.api_key,
                         model_name=large_model_config.model_name,
                         prompt=synthesis_prompt,
+                        collector=large_collector,
                     ):
                         yield token
+                    if large_collector and large_collector[0]:
+                        await consume_budget(client_ip, count_tokens(large_collector[0]))
+                    return
                 else:
                     print(f"✅ QUALITY CHECK PASSED | small model response accepted ({len(collector[0])} chars)")
+
+            if collector and collector[0]:
+                await consume_budget(client_ip, count_tokens(collector[0]))
 
         else:
             # Cache miss: stream tokens live while collecting the full response
@@ -150,6 +185,7 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                 yield token
 
             full_response = collector[0] if collector else ""
+            used_large_model = False
 
             # Escalate if small_then_escalate and quality is poor
             if needs_quality_check and full_response:
@@ -171,8 +207,13 @@ async def chat_endpoint(request: ChatRequest, req: Request):
                         yield token
                     # Use the large model response for caching
                     full_response = large_collector[0] if large_collector else full_response
+                    used_large_model = True
                 else:
                     print(f"✅ QUALITY CHECK PASSED | small model response accepted ({len(full_response)} chars)")
+            
+            # Consume budget for output tokens
+            if full_response:
+                await consume_budget(client_ip, count_tokens(full_response))
 
             # Store in Pinecone for future cache hits
             if full_response and not full_response.startswith("Error:"):

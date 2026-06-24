@@ -9,3 +9,4 @@ pinecone
 spacy
 pydantic
 joblib
+tiktoken

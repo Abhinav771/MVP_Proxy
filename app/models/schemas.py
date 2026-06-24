@@ -9,3 +9,7 @@ class ChatRequest(BaseModel):
         if not v.strip():
             raise ValueError("Prompt cannot be empty")
         return v
+
+class SetLimitRequest(BaseModel):
+    ip: str
+    limit: int
