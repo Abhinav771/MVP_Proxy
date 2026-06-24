@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+redis[asyncio]
+groq
+openai
+google-genai
+pinecone
+spacy
+pydantic
