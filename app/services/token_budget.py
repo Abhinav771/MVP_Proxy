@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from app.core import redis_db
 
-# Default daily limit for a user (employee)
-DEFAULT_DAILY_LIMIT = 1_000_000
+# Default daily limits
+DEFAULT_SMALL_LIMIT = 1_000_000
+DEFAULT_LARGE_LIMIT = 100_000
 
 # Initialize the tokenizer
 # cl100k_base is fast and serves as a good proxy for most models including Llama.
@@ -16,46 +17,57 @@ def count_tokens(text: str) -> int:
         return 0
     return len(encoder.encode(text))
 
-def get_budget_key(ip: str) -> str:
-    """Generate the daily token usage key for a given IP."""
+def get_budget_key(ip: str, model_type: str) -> str:
+    """Generate the daily token usage key for a given IP and model type."""
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return f"tokens:{ip}:{date_str}"
+    return f"tokens:{ip}:{model_type}:{date_str}"
 
-def get_limit_key(ip: str) -> str:
-    """Generate the daily custom limit key for a given IP."""
+def get_limit_key(ip: str, model_type: str) -> str:
+    """Generate the daily custom limit key for a given IP and model type."""
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return f"limit:{ip}:{date_str}"
+    return f"limit:{ip}:{model_type}:{date_str}"
 
-async def get_user_limit(ip: str) -> int:
+async def get_user_limit(ip: str, model_type: str) -> int:
     """
     Fetch the custom limit for the user from Redis if it exists.
-    Otherwise, return the DEFAULT_DAILY_LIMIT.
+    Otherwise, return the default for that model type.
     """
-    key = get_limit_key(ip)
+    key = get_limit_key(ip, model_type)
     custom_limit = await redis_db.redis_client.get(key)
     if custom_limit:
         return int(custom_limit)
-    return DEFAULT_DAILY_LIMIT
+    return DEFAULT_LARGE_LIMIT if model_type == "large" else DEFAULT_SMALL_LIMIT
 
-async def check_budget(ip: str, required_tokens: int = 0) -> None:
+async def check_budget(ip: str, model_type: str, required_tokens: int = 0) -> None:
     """
     Check if the user has enough token budget left for the day.
     Raises HTTPException 429 if the budget is exceeded.
     """
-    key = get_budget_key(ip)
+    key = get_budget_key(ip, model_type)
     
     current_usage = await redis_db.redis_client.get(key)
     current_usage = int(current_usage) if current_usage else 0
     
-    daily_limit = await get_user_limit(ip)
+    daily_limit = await get_user_limit(ip, model_type)
     
     if current_usage + required_tokens > daily_limit:
         raise HTTPException(
             status_code=429,
-            detail="Your daily token limit is over."
+            detail=f"Your daily token limit for {model_type} model is over."
         )
 
-async def consume_budget(ip: str, used_tokens: int) -> None:
+async def check_budget_boolean(ip: str, model_type: str, required_tokens: int = 0) -> bool:
+    """Non-raising version of check_budget. Returns True if OK, False if exceeded."""
+    key = get_budget_key(ip, model_type)
+    
+    current_usage = await redis_db.redis_client.get(key)
+    current_usage = int(current_usage) if current_usage else 0
+    
+    daily_limit = await get_user_limit(ip, model_type)
+    
+    return current_usage + required_tokens <= daily_limit
+
+async def consume_budget(ip: str, model_type: str, used_tokens: int) -> None:
     """
     Increment the user's daily token usage by `used_tokens`
     and ensure the key expires in 24 hours.
@@ -63,7 +75,7 @@ async def consume_budget(ip: str, used_tokens: int) -> None:
     if used_tokens <= 0:
         return
         
-    key = get_budget_key(ip)
+    key = get_budget_key(ip, model_type)
     
     # Increment usage
     new_usage = await redis_db.redis_client.incrby(key, used_tokens)
@@ -73,23 +85,36 @@ async def consume_budget(ip: str, used_tokens: int) -> None:
     if new_usage == used_tokens:
         await redis_db.redis_client.expire(key, 86400)
 
-async def set_custom_limit(ip: str, new_limit: int) -> None:
-    """Admin function: Set a custom token limit for a specific IP for today only."""
+async def set_custom_limit(ip: str, model_type: str, new_limit: int) -> None:
+    """Admin function: Set a custom token limit for a specific IP and model type for today only."""
     if new_limit < 0:
         raise ValueError("Limit must be positive")
-    key = get_limit_key(ip)
+    key = get_limit_key(ip, model_type)
     await redis_db.redis_client.set(key, new_limit, ex=86400)
 
 async def get_current_usage(ip: str) -> dict:
-    """Admin function: Get the current daily usage and limit for a specific IP."""
-    key = get_budget_key(ip)
-    usage = await redis_db.redis_client.get(key)
-    limit = await get_user_limit(ip)
+    """Admin function: Get the current daily usage and limit for a specific IP (both models)."""
+    small_usage = await redis_db.redis_client.get(get_budget_key(ip, "small"))
+    large_usage = await redis_db.redis_client.get(get_budget_key(ip, "large"))
+    
+    small_limit = await get_user_limit(ip, "small")
+    large_limit = await get_user_limit(ip, "large")
+    
+    s_used = int(small_usage) if small_usage else 0
+    l_used = int(large_usage) if large_usage else 0
+    
     return {
         "ip": ip,
-        "tokens_used_today": int(usage) if usage else 0,
-        "daily_limit": limit,
-        "remaining": limit - (int(usage) if usage else 0)
+        "small_model": {
+            "used": s_used,
+            "limit": small_limit,
+            "remaining": small_limit - s_used
+        },
+        "large_model": {
+            "used": l_used,
+            "limit": large_limit,
+            "remaining": large_limit - l_used
+        }
     }
 
 async def get_all_users_usage() -> list[dict]:
@@ -99,19 +124,16 @@ async def get_all_users_usage() -> list[dict]:
     
     keys = await redis_db.redis_client.keys(pattern)
     
-    users = []
+    ips = set()
     for key in keys:
         key_str = key if isinstance(key, str) else key.decode("utf-8")
         parts = key_str.split(":")
-        if len(parts) >= 3:
-            # Reconstruct the IP (in case IP is IPv6, though splitting by ':' makes IPv6 tricky. 
-            # We assume IPv4 for MVP, or just extract the substring between 'tokens:' and ':{date_str}')
-            # A safer way to extract the IP:
-            prefix = "tokens:"
-            suffix = f":{date_str}"
-            if key_str.startswith(prefix) and key_str.endswith(suffix):
-                ip = key_str[len(prefix):-len(suffix)]
-                usage_data = await get_current_usage(ip)
-                users.append(usage_data)
+        # Format is tokens:{ip}:{model_type}:{date} -> so len is 4
+        if len(parts) >= 4:
+            ips.add(parts[1])
+            
+    users = []
+    for ip in ips:
+        users.append(await get_current_usage(ip))
             
     return users

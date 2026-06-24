@@ -12,4 +12,5 @@ class ChatRequest(BaseModel):
 
 class SetLimitRequest(BaseModel):
     ip: str
+    model_type: str # "small" or "large"
     limit: int
