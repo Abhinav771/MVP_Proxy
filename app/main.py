@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import redis.asyncio as aioredis
@@ -8,12 +9,13 @@ from app.api.routes import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # STARTUP
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_db.redis_client = aioredis.from_url(
-        "redis://localhost:6379",
+        redis_url,
         encoding="utf-8",
         decode_responses=True
     )
-    print("✅ Connected to Redis")
+    print(f"✅ Connected to Redis at {redis_url}")
     
     yield  # server runs here
     

@@ -13,6 +13,8 @@ import { Bar, Doughnut } from 'react-chartjs-2';
 import { Activity, Database, Server, DollarSign, AlertCircle, CreditCard } from 'lucide-react';
 import './App.css';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -38,12 +40,12 @@ function App() {
 
   const fetchData = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/admin/api/dashboard');
+      const response = await fetch(`${API_BASE}/admin/api/dashboard`);
       if (!response.ok) throw new Error('Network response was not ok');
       const result = await response.json();
       
       // Also fetch users
-      const usersResponse = await fetch('http://127.0.0.1:8000/admin/users');
+      const usersResponse = await fetch(`${API_BASE}/admin/users`);
       let usersResult = { users: [] };
       if (usersResponse.ok) {
         usersResult = await usersResponse.json();
